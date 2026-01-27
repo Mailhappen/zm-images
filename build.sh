@@ -4,6 +4,7 @@
 # Base OS we are using
 base_os_name="yeak/zm-base-os"
 base_os_version="rockylinux9"
+final_image_prefix="yeak/zimbra"
 vendor_name="Mailhappen"
 
 # We use zcs from Maldua now
@@ -11,7 +12,7 @@ url=https://github.com/maldua/zimbra-foss/releases/download/zimbra-foss-build-rh
 
 # Build function
 build() {
-	final_image_name="yeak/zimbra-$1"
+	final_image_name="$final_image_prefix-$1"
 	zcs=$(basename $url)
 	zcs=${zcs%.tgz}
 	ver=$(dirname $url)
