@@ -1,12 +1,9 @@
 #!/bin/bash
 #set -x
 
-# Simple test
-docker run -it --rm -d \
-	-h mail.example.test \
-	yeak/zimbra-aio:10.1.15.p1
-
 # Advanced test
+# Note: This will create many volumes under the hostname.
+
 HOSTNAME="mail.example.test"
 prefix="$(echo ${HOSTNAME} | tr -d '.')"
 cmd="docker run -d -it --name ${HOSTNAME} \
@@ -37,4 +34,4 @@ cmd="docker run -d -it --name ${HOSTNAME} \
 	yeak/zimbra-aio:10.1.15.p1"
 
 echo $cmd
-#eval $cmd
+eval $cmd
