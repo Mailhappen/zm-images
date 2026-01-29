@@ -13,15 +13,15 @@ cmd="docker run -d -it --name zmdocker-${HOSTNAME} \
     -v ${prefix}-ssh:/opt/zimbra/.ssh \
     -v ${prefix}-backup:/opt/zimbra/backup \
     -v ${prefix}-common-conf:/opt/zimbra/common/conf \
-    -v ${prefix}-common-etc-java:/opt/zimbra/common/etc/java/ \
-    -v ${prefix}-common-jetty_home-resources:/opt/zimbra/common/jetty_home/resources/ \
+    -v ${prefix}-common-etc-java:/opt/zimbra/common/etc/java \
+    -v ${prefix}-common-jetty_home-resources:/opt/zimbra/common/jetty_home/resources \
     -v ${prefix}-conf:/opt/zimbra/conf \
     -v ${prefix}-data:/opt/zimbra/data \
     -v ${prefix}-db-data:/opt/zimbra/db/data \
     -v ${prefix}-index:/opt/zimbra/index \
-    -v ${prefix}-jetty_base-etc:/opt/zimbra/jetty_base/etc/ \
-    -v ${prefix}-jetty_base-modules:/opt/zimbra/jetty_base/modules/ \
-    -v ${prefix}-jetty_base-start.d:/opt/zimbra/jetty_base/start.d/ \
+    -v ${prefix}-jetty_base-etc:/opt/zimbra/jetty_base/etc \
+    -v ${prefix}-jetty_base-modules:/opt/zimbra/jetty_base/modules \
+    -v ${prefix}-jetty_base-start.d:/opt/zimbra/jetty_base/start.d \
     -v ${prefix}-log:/opt/zimbra/log \
     -v ${prefix}-logger:/opt/zimbra/logger \
     -v ${prefix}-redolog:/opt/zimbra/redolog \
