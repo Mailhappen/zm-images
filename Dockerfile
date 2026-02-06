@@ -22,6 +22,7 @@ RUN cat install.txt | cut -d' ' -f1 > /tmp/keystrokes \
   && sed -i '/checkRequired/d' install.sh \
   && ./install.sh -s < /tmp/keystrokes \
   && sed -i 's/@@BUILD_PLATFORM@@/RHEL9_64/' /opt/zimbra/.platform \
+  && sed -i 's/"Release $release/"Docker Release $release/' /opt/zimbra/bin/zmcontrol \
   && rm -f /tmp/install.log* \
   && cd .. \
   && rm -rf ${ZCS} \
