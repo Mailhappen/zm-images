@@ -1,0 +1,549 @@
+# Hand-port of the Zimbra nginx patch hunks that do not apply to nginx 1.30.7 (apply with -p1, after Zimbra's 23 patches).
+# Covers: --with-mail-sasl option vars, upstream server 'version=' + NGX_HTTP_UPSTREAM_VERSION + connect hook,
+# exact_version_check, ssl_session_reuse guard, mail handler (SASL includes, AUTH PLAIN/LOGIN abort + length checks),
+# IMAP parser state rename (swi_*) + RFC3501 backslash rule, IMAP upstream response parser, and the
+# 'return;' -> ZM_LOOKUP_SSL_EVENT_FAILED bug fix in ngx_zm_lookup.c, and upstream keepalive (implicit since 1.29.7)
+# off by default + NGX_AGAIN passthrough in the keepalive peer init (zmauth route lookup is asynchronous). NOT ported on purpose: max_headers
+# (native in 1.30) and the removal of ngx_ssl_ocsp_cleanup() in ngx_event_openssl.c.
+
+diff -ruN nginx/auto/options ../t130s/auto/options
+--- nginx/auto/options
++++ nginx/auto/options
+@@ -157,6 +157,12 @@
+ USE_OPENSSL_QUIC=NO
+ OPENSSL=NONE
+ 
++# Zimbra customizations start here: Implement SASL Authentication (Jira Tickets: )
++USE_SASL=NO
++SASL=NONE
++SASL_OPT=
++# Zimbra customizations end here
++
+ USE_ZLIB=NO
+ ZLIB=NONE
+ ZLIB_OPT=
+diff -ruN nginx/src/core/ngx_zm_lookup.c ../t130s/src/core/ngx_zm_lookup.c
+--- nginx/src/core/ngx_zm_lookup.c
++++ nginx/src/core/ngx_zm_lookup.c
+@@ -745,7 +745,7 @@
+         != NGX_OK)
+     {
+         ngx_zm_lookup_close_connection(ctx);
+-        return;
++        return ZM_LOOKUP_SSL_EVENT_FAILED;
+     }
+ 
+     c->log->action = "SSL handshaking to lookup handler";
+diff -ruN nginx/src/http/ngx_http_core_module.c ../t130s/src/http/ngx_http_core_module.c
+--- nginx/src/http/ngx_http_core_module.c
++++ nginx/src/http/ngx_http_core_module.c
+@@ -798,7 +798,14 @@
+       NULL },
+ 
+ #endif
+-
++// Zimbra customizations start here (Jira Tickets: )
++    { ngx_string("exact_version_check"),
++      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
++      ngx_conf_set_flag_slot,
++      NGX_HTTP_LOC_CONF_OFFSET,
++      offsetof(ngx_http_core_loc_conf_t, exact_version_check),
++      NULL },
++// Zimbra customizations end here
+       ngx_null_command
+ };
+ 
+@@ -3702,6 +3709,9 @@
+     clcf->open_file_cache_min_uses = NGX_CONF_UNSET_UINT;
+     clcf->open_file_cache_errors = NGX_CONF_UNSET;
+     clcf->open_file_cache_events = NGX_CONF_UNSET;
++// Zimbra customizations start here (Jira Tickets: )
++    clcf->exact_version_check = NGX_CONF_UNSET;
++// Zimbra customizations end here
+ 
+ #if (NGX_HTTP_GZIP)
+     clcf->gzip_vary = NGX_CONF_UNSET;
+diff -ruN nginx/src/http/ngx_http_core_module.h ../t130s/src/http/ngx_http_core_module.h
+--- nginx/src/http/ngx_http_core_module.h
++++ nginx/src/http/ngx_http_core_module.h
+@@ -413,6 +413,10 @@
+     ngx_flag_t    chunked_transfer_encoding; /* chunked_transfer_encoding */
+     ngx_flag_t    etag;                    /* etag */
+ 
++// Zimbra customizations start here (Jira Tickets: )
++    ngx_flag_t    exact_version_check;     /* added by zimbra for version check */
++// Zimbra customizations end here
++
+ #if (NGX_HTTP_GZIP)
+     ngx_flag_t    gzip_vary;               /* gzip_vary */
+ 
+diff -ruN nginx/src/http/ngx_http_upstream.c ../t130s/src/http/ngx_http_upstream.c
+--- nginx/src/http/ngx_http_upstream.c
++++ nginx/src/http/ngx_http_upstream.c
+@@ -1804,7 +1804,9 @@
+ 
+ #endif
+ 
+-    if (u->conf->ssl_session_reuse) {
++// Zimbra customizations start here (Jira Tickets: )
++    if (u->conf->ssl_session_reuse && rrp->current != (void *) NGX_INVALID_ARRAY_INDEX) {
++// Zimbra customizations end here
+         c->ssl->save_session = ngx_http_upstream_ssl_save_session;
+ 
+         if (u->peer.set_session(&u->peer, u->peer.data) != NGX_OK) {
+@@ -6491,6 +6493,10 @@
+     max_conns = 0;
+     max_fails = 1;
+     fail_timeout = 10;
++// Zimbra customizations start here (Jira Tickets: )
++    version.len = 0;
++    version.data = NULL;
++// Zimbra customizations end here
+ #if (NGX_HTTP_UPSTREAM_ZONE)
+     resolve = 0;
+ #endif
+@@ -6637,6 +6643,22 @@
+         }
+ #endif
+ 
++// Zimbra customizations start here (Jira Tickets: )
++        if (ngx_strncmp(value[i].data, "version=", 8) == 0) {
++
++            if (!(uscf->flags & NGX_HTTP_UPSTREAM_VERSION)) {
++                goto invalid;
++            }
++
++            s.len = value[i].len - 8;
++            s.data = &value[i].data[8];
++
++            version = s;
++
++            continue;
++        }
++// Zimbra customizations end here
++
+         goto invalid;
+     }
+ 
+diff -ruN nginx/src/http/ngx_http_upstream.h ../t130s/src/http/ngx_http_upstream.h
+--- nginx/src/http/ngx_http_upstream.h
++++ nginx/src/http/ngx_http_upstream.h
+@@ -128,6 +128,9 @@
+ #define NGX_HTTP_UPSTREAM_FAIL_TIMEOUT  0x0008
+ #define NGX_HTTP_UPSTREAM_DOWN          0x0010
+ #define NGX_HTTP_UPSTREAM_BACKUP        0x0020
++// Zimbra customizations start here (Jira Tickets: )
++#define NGX_HTTP_UPSTREAM_VERSION       0x0040
++// Zimbra customizations end here
+ #define NGX_HTTP_UPSTREAM_MODIFY        0x0040
+ #define NGX_HTTP_UPSTREAM_MAX_CONNS     0x0100
+ 
+@@ -145,6 +148,9 @@
+     in_port_t                        port;
+     ngx_uint_t                       no_port;  /* unsigned no_port:1 */
+ 
++// Zimbra customizations start here (Jira Tickets: )    // added by zimbra to support async upstream peer init
++    void (* connect)(ngx_http_request_t *r, ngx_http_upstream_t *u);
++// Zimbra customizations end here
+ #if (NGX_HTTP_UPSTREAM_ZONE)
+     ngx_shm_zone_t                  *shm_zone;
+     ngx_resolver_t                  *resolver;
+diff -ruN nginx/src/mail/ngx_mail_handler.c ../t130s/src/mail/ngx_mail_handler.c
+--- nginx/src/mail/ngx_mail_handler.c
++++ nginx/src/mail/ngx_mail_handler.c
+@@ -10,10 +10,21 @@
+ #include <ngx_event.h>
+ #include <ngx_mail.h>
+ 
++#include <sasl/sasl.h>
++#include <sasl/saslplug.h>
++#include <ngx_mail_throttle_module.h>
++#include <ngx_mail_pop3_module.h>
++#include <ngx_mail_smtp_module.h>
++#include <ngx_mail_zmauth_module.h>
++
+ 
+ static void ngx_mail_proxy_protocol_handler(ngx_event_t *rev);
+ static void ngx_mail_init_session_handler(ngx_event_t *rev);
+ static void ngx_mail_init_session(ngx_connection_t *c);
++static void ngx_mail_choke_session(throttle_callback_t *cb);
++static void ngx_mail_allow_session(throttle_callback_t *cb);
++static void ngx_mail_allow_userauth(throttle_callback_t *cb);
++static void ngx_mail_choke_userauth(throttle_callback_t *cb);
+ static void ngx_mail_block_read(ngx_event_t *rev);
+ 
+ #if (NGX_MAIL_SSL)
+@@ -783,14 +794,42 @@
+ #endif
+ 
+ 
++/* Decode an SASL PLAIN challenge (RFC 4616)
++   If AUTHZ is empty:
++    set s->usedauth = 0,
++    set s->login = AUTHC
++   If AUTHZ is present:
++    set s->usedauth = 1
++    set s->dusr = AUTHC
++    set s->login = AUTHZ
++ */
+ ngx_int_t
+ ngx_mail_auth_plain(ngx_mail_session_t *s, ngx_connection_t *c, ngx_uint_t n)
+ {
+     u_char     *p, *pos, *last;
+-    ngx_str_t  *arg, plain;
++    ngx_str_t  *arg, plain, temp;
+ 
+     arg = s->args.elts;
+ 
++#if (NGX_MAIL_SSL)
++    if(ngx_mail_starttls_only(s, c)) {
++        return NGX_MAIL_PARSE_INVALID_COMMAND;
++    }
++#endif
++
++    /* check if the auth exchange is being aborted */
++    if (s->args.nelts > 0 &&
++        arg[n].len == 1 &&
++        arg[n].data[0] == '*'
++       )
++    {
++        ngx_log_debug0 (NGX_LOG_DEBUG_MAIL, c->log, 0,
++            "auth:abort SASL PLAIN");
++
++        ngx_mail_dispose_sasl_context(s);
++        return NGX_MAIL_AUTH_ABORT;
++    }
++
+ #if (NGX_DEBUG_MAIL_PASSWD)
+     ngx_log_debug1(NGX_LOG_DEBUG_MAIL, c->log, 0,
+                    "mail auth plain: \"%V\"", &arg[n]);
+@@ -820,6 +859,9 @@
+         return NGX_MAIL_PARSE_INVALID_COMMAND;
+     }
+ 
++    s->dusr.data = plain.data;
++    s->dusr.len = p - plain.data - 1;
++
+     pos = p;
+ 
+     while (p < last && *p) { p++; }
+@@ -874,6 +916,23 @@
+     ngx_log_debug1(NGX_LOG_DEBUG_MAIL, c->log, 0,
+                    "mail auth login username: \"%V\"", &arg[n]);
+ 
++    /* check if the auth exchange is being aborted */
++    if (s->args.nelts > 0 &&
++        arg[n].len == 1 &&
++        arg[n].data[0] == '*'
++       )
++    {
++        ngx_log_debug0 (NGX_LOG_DEBUG_MAIL, c->log, 0,
++            "auth:abort SASL LOGIN");
++
++        ngx_mail_dispose_sasl_context(s);
++        return NGX_MAIL_AUTH_ABORT;
++    }
++
++    if (ngx_base64_decoded_length(arg[n].len) > NGX_MAIL_MAX_LOGIN_LEN) {
++        return NGX_MAIL_AUTH_FAILED;
++    }
++
+     login.data = ngx_pnalloc(c->pool, ngx_base64_decoded_length(arg[n].len));
+     if (login.data == NULL) {
+         return NGX_ERROR;
+@@ -906,6 +965,23 @@
+                    "mail auth login password: \"%V\"", &arg[0]);
+ #endif
+ 
++    /* check if the auth exchange is being aborted */
++    if (s->args.nelts > 0 &&
++        arg[0].len == 1 &&
++        arg[0].data[0] == '*'
++       )
++    {
++        ngx_log_debug0 (NGX_LOG_DEBUG_MAIL, c->log, 0,
++            "auth:abort SASL LOGIN");
++
++        ngx_mail_dispose_sasl_context(s);
++        return NGX_MAIL_AUTH_ABORT;
++    }
++
++    if (ngx_base64_decoded_length(arg[0].len) > NGX_MAIL_MAX_PASSWORD_LEN) {
++        return NGX_MAIL_AUTH_FAILED;
++    }
++
+     passwd.data = ngx_pnalloc(c->pool, ngx_base64_decoded_length(arg[0].len));
+     if (passwd.data == NULL) {
+         return NGX_ERROR;
+diff -ruN nginx/src/mail/ngx_mail_parse.c ../t130s/src/mail/ngx_mail_parse.c
+--- nginx/src/mail/ngx_mail_parse.c
++++ nginx/src/mail/ngx_mail_parse.c
+@@ -639,23 +639,29 @@
+             case '\\':
+                 if (s->quoted) {
+                     s->backslash = 1;
+-                    state = sw_backslash;
++                    state = swi_backslash;
+                 }
+                 break;
+             }
+             break;
+ 
+-        case sw_backslash:
++        case swi_backslash:
+             switch (ch) {
+             case CR:
+             case LF:
+                 goto invalid;
++            // (RFC3501)
++            // a backslash may only escape another backslash, or a double quote
++            case '\\':
++            case '"':
++                state = swi_argument;
++                break;
+             default:
+-                state = sw_argument;
++                goto invalid;
+             }
+             break;
+ 
+-        case sw_literal:
++        case swi_literal:
+             if (s->literal_len > NGX_MAX_SIZE_T_VALUE / 10) {
+                 goto invalid;
+             }
+@@ -664,24 +670,24 @@
+                 break;
+             }
+             if (ch == '}') {
+-                state = sw_start_literal_argument;
++                state = swi_start_literal_argument;
+                 break;
+             }
+             if (ch == '+') {
+-                state = sw_no_sync_literal_argument;
++                state = swi_no_sync_literal_argument;
+                 break;
+             }
+             goto invalid;
+ 
+-        case sw_no_sync_literal_argument:
++        case swi_no_sync_literal_argument:
+             if (ch == '}') {
+                 s->no_sync_literal = 1;
+-                state = sw_start_literal_argument;
++                state = swi_start_literal_argument;
+                 break;
+             }
+             goto invalid;
+ 
+-        case sw_start_literal_argument:
++        case swi_start_literal_argument:
+             switch (ch) {
+             case CR:
+                 break;
+@@ -712,17 +718,17 @@
+             arg->len = p + 1 - s->arg_start;
+             arg->data = s->arg_start;
+             s->arg_start = NULL;
+-            state = sw_end_literal_argument;
++            state = swi_end_literal_argument;
+ 
+             break;
+ 
+-        case sw_end_literal_argument:
++        case swi_end_literal_argument:
+             switch (ch) {
+             case ' ':
+-                state = sw_spaces_before_argument;
++                state = swi_spaces_before_argument;
+                 break;
+             case CR:
+-                state = sw_almost_done;
++                state = swi_almost_done;
+                 break;
+             case LF:
+                 goto done;
+@@ -731,13 +737,15 @@
+             }
+             break;
+ 
+-        case sw_almost_done:
++        case swi_almost_done:
+             switch (ch) {
+             case LF:
+                 goto done;
+             default:
+                 goto invalid;
+             }
++        default:
++            break; /* for avoid warning only */
+         }
+     }
+ 
+diff -ruN nginx/src/mail/ngx_mail_proxy_module.c ../t130s/src/mail/ngx_mail_proxy_module.c
+--- nginx/src/mail/ngx_mail_proxy_module.c
++++ nginx/src/mail/ngx_mail_proxy_module.c
+@@ -244,8 +244,6 @@
+     s->connection->write->handler = ngx_mail_proxy_block_write;
+     p->upstream.connection->write->handler = ngx_mail_proxy_write_handler;
+ 
+-    pcf = ngx_mail_get_module_srv_conf(s, ngx_mail_proxy_module);
+-
+     s->proxy->buffer = ngx_create_temp_buf(s->connection->pool,
+                                            pcf->buffer_size);
+     if (s->proxy->buffer == NULL) {
+@@ -1633,49 +1631,88 @@
+         switch (state) {
+ 
+         case ngx_imap_start:
+-            if (p[0] == '*' && p[1] == ' ' && p[2] == 'O' && p[3] == 'K') {
++            if (ngx_strncmp(p, "* OK", sizeof("* OK") - 1) == 0) {
++                char *k = strchr((char *)p, '\n');
++                if (k != NULL) {
++                    /* bug 79531 identify the [ALERT] msg from upstream */
++                    if (ngx_strncmp(k+1, "* OK [ALERT]", sizeof("* OK [ALERT]") - 1) == 0) {
++                        ngx_log_debug0(NGX_LOG_DEBUG_MAIL, s->connection->log, 0,
++                                        "ALERT message recvd from upstream");
++                        s->out.len = b->last - b->pos;
++                        s->out.data = b->pos;
++                        return NGX_ABORT;
++                    }
++                }
+                 return NGX_OK;
+             }
+             break;
+ 
+         case ngx_imap_login:
+         case ngx_imap_user:
++        case ngx_imap_auth_plain:
+             if (p[0] == '+') {
+                 return NGX_OK;
+             }
+             break;
+ 
+-        case ngx_imap_passwd:
++        case ngx_imap_id:
++            /* bug 68678 ignore the untagged error for the ID command */
++            if (ngx_strncmp(p, "* BAD", sizeof("* BAD") - 1) == 0) {
++                return NGX_OK;
++            }
+ 
+-            /*
+-             * untagged CAPABILITY response (draft-crispin-imapv-16),
+-             * known to be sent by SmarterMail and Gmail
++            /* fall through */
++        case ngx_imap_passwd:
++        case ngx_imap_auth_plain_ir:
++            /* Consume (optional, untagged response, plus) tagged response to
++               IMAP command previously issued
++               As the switch case indicates, we are prepared to handle this
++               after sending the ID command, or after sending the password to
++               the upstream imap server
++               In the former case, the IMAP server MAY optionally include an
++               untagged ID repsonse (RFC 2971, section 3.1)
++               In the latter case, the IMAP server MAY include a CAPABILITY
++               response code in the tagged OK response to a successful LOGIN
++               command (RFC 3501, section 6.2.3)
+              */
+ 
+-            if (p[0] == '*' && p[1] == ' ') {
+-                p += 2;
+-
+-                while (p < b->last - 1) {
+-                    if (p[0] == CR && p[1] == LF) {
+-                        p += 2;
++            while ((p != NULL) && (p < b->last))
++            {
++                if (ngx_strncmp(p, s->tag.data, s->tag.len) == 0)
++                {
++                    /* This line is the tagged response */
++                    expect_chunk = 0;
++
++                    p += s->tag.len + 1 /*for space*/;
++                    if (p[0] == 'O' && p[1] == 'K')
++                    {
++                        return NGX_OK;
++                    }
++                    else
++                    {
+                         break;
+                     }
+-
+-                    p++;
+                 }
+-
+-                if (b->last - p < 4) {
+-                    return NGX_AGAIN;
+-                }
+-            }
+-
+-            if (ngx_strncmp(p, s->tag.data, s->tag.len) == 0) {
+-                p += s->tag.len;
+-                if (p[0] == 'O' && p[1] == 'K') {
+-                    return NGX_OK;
++                else
++                {
++                    /* this line is any optional untagged response
++                     */
++                    p = (u_char *)strstr ((char *)p, (char *)"\n");
++                    if (!p)
++                    {
++                        /* if we don't find the newline, it indicates an
++                           invalid response
++                         */
++                        break;
++                    }
++                    else
++                    {
++                        /* the first (possible) chunk has been read */
++                        expect_chunk = 1;
++                        ++p;
++                    }
+                 }
+             }
+-
+             break;
+         }
+ 
+--- nginx/src/http/modules/ngx_http_upstream_keepalive_module.c
++++ nginx/src/http/modules/ngx_http_upstream_keepalive_module.c
+@@ -157,6 +157,7 @@
+ ngx_http_upstream_init_keepalive_peer(ngx_http_request_t *r,
+     ngx_http_upstream_srv_conf_t *us)
+ {
++    ngx_int_t                                 rc;
+     ngx_http_upstream_keepalive_peer_data_t  *kp;
+     ngx_http_upstream_keepalive_srv_conf_t   *kcf;
+ 
+@@ -171,7 +172,9 @@
+         return NGX_ERROR;
+     }
+ 
+-    if (kcf->original_init_peer(r, us) != NGX_OK) {
++    rc = kcf->original_init_peer(r, us);
++    /* NGX_AGAIN: the original init is asynchronous (zmauth route lookup) */
++    if (rc != NGX_OK && rc != NGX_AGAIN) {
+         return NGX_ERROR;
+     }
+ 
+@@ -197,7 +200,7 @@
+         r->upstream->peer.notify = ngx_http_upstream_notify_keepalive_peer;
+     }
+ 
+-    return NGX_OK;
++    return rc;
+ }
+ 
+ 
+@@ -541,7 +544,9 @@
+         kcf = ngx_http_conf_upstream_srv_conf(uscfp[i],
+                                             ngx_http_upstream_keepalive_module);
+ 
+-        if (kcf->max_cached == 0) {
++        /* Zimbra: nginx >= 1.29.7 enables upstream keepalive implicitly (32);
++         * Zimbra 1.24 did not. Keep it off unless 'keepalive N' is configured. */
++        if (kcf->max_cached == 0 || kcf->max_cached == NGX_CONF_UNSET_UINT) {
+             continue;
+         }
+ 

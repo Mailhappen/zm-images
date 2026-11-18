@@ -31,3 +31,7 @@ We may push the image to the docker repositories for public use. In short, once 
 
 The images will be used by project **zm-docker** to run Zimbra in container.
 
+
+## nginx 1.30.7 patch (CVE-2026-123007 and others)
+
+Zimbra still bundles nginx 1.24.0, which is affected by the November 2026 nginx advisory (mail proxy: unauthenticated). `Dockerfile.nginx-patch` adds a layer with nginx 1.30.7 + Zimbra's patch set, see [nginx/README.md](nginx/README.md).

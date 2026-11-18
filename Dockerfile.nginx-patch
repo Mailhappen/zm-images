@@ -1,0 +1,18 @@
+# Optional layer on top of an image built by this repo (aio / proxy): replaces Zimbra's bundled
+# nginx 1.24.0 by nginx 1.30.7 with Zimbra's patch set. See nginx/README.md.
+#   docker build -f Dockerfile.nginx-patch --build-arg BASE_IMAGE=yeak/zimbra-aio:10.1.20.p1 \
+#                -t yeak/zimbra-aio:10.1.20.p1-nginx1.30.7 .
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE} AS nginx-build
+RUN dnf -y install git patch pcre-devel zlib-devel perl perl-IPC-Cmd perl-Data-Dumper perl-File-Compare \
+      perl-File-Copy perl-FindBin && dnf clean all
+COPY nginx/ /usr/src/zimbra-nginx/
+RUN OUT=/out bash /usr/src/zimbra-nginx/build-nginx.sh build
+
+FROM ${BASE_IMAGE}
+COPY --from=nginx-build /out/nginx /opt/zimbra/common/sbin/nginx
+# same owner/mode as the stock binary; the file capability lets the zimbra user bind 110/143/993/995
+RUN chown root:zimbra /opt/zimbra/common/sbin/nginx && chmod 750 /opt/zimbra/common/sbin/nginx \
+ && setcap cap_net_bind_service=+ep /opt/zimbra/common/sbin/nginx \
+ && getcap /opt/zimbra/common/sbin/nginx | grep -q cap_net_bind_service \
+ && /opt/zimbra/common/sbin/nginx -v 2>&1 | grep -q 'nginx/1.30.7'
